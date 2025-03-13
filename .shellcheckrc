@@ -1,0 +1,3 @@
+# Don't complain about not following sourced scripts as most of these live in
+# gha-tools
+disable=SC1091
