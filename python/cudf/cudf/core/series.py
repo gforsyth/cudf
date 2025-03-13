@@ -20,7 +20,6 @@ import pylibcudf as plc  # noqa: TC002
 import cudf
 from cudf.api.extensions import no_default
 from cudf.api.types import (
-    _is_non_decimal_numeric_dtype,
     _is_scalar_or_zero_d_array,
     is_dict_like,
     is_integer,
@@ -62,8 +61,10 @@ from cudf.errors import MixedTypeError
 from cudf.utils import docutils
 from cudf.utils.docutils import copy_docstring
 from cudf.utils.dtypes import (
+    CUDF_STRING_DTYPE,
     can_convert_to_column,
     find_common_type,
+    is_dtype_obj_numeric,
     is_mixed_with_object_dtype,
     to_cudf_compatible_scalar,
 )
@@ -75,8 +76,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
     from cudf._typing import (
-        ColumnLike,
         DataFrameOrSeries,
+        Dtype,
         NotImplementedType,
         ScalarLike,
     )
@@ -115,7 +116,7 @@ def _describe_timetype(obj, percentiles, typ):
             zip(
                 _format_percentile_names(percentiles),
                 obj.quantile(percentiles)
-                .astype("str")
+                .astype(CUDF_STRING_DTYPE)
                 .to_numpy(na_value=np.nan)
                 .tolist(),
             )
@@ -164,12 +165,13 @@ def _describe_categorical(obj, percentiles):
     return data
 
 
-def _append_new_row_inplace(col: ColumnLike, value: ScalarLike):
+def _append_new_row_inplace(col: ColumnBase, value: ScalarLike) -> None:
     """Append a scalar `value` to the end of `col` inplace.
     Cast to common type if possible
     """
-    to_type = find_common_type([type(value), col.dtype])
-    val_col = as_column(value, dtype=to_type)
+    val_col = as_column(value)
+    to_type = find_common_type([val_col.dtype, col.dtype])
+    val_col = val_col.astype(to_type)
     old_col = col.astype(to_type)
 
     col._mimic_inplace(concat_columns([old_col, val_col]), inplace=True)
@@ -230,8 +232,7 @@ class _SeriesIlocIndexer(_FrameIndexer):
                 or (isinstance(value, cudf.Scalar) and value.dtype.kind == "b")
             ):
                 raise MixedTypeError(
-                    f"Cannot assign {value=} to "
-                    f"bool dtype={self._frame.dtype}"
+                    f"Cannot assign {value=} to bool dtype={self._frame.dtype}"
                 )
         elif not (
             isinstance(value, (list, dict))
@@ -250,13 +251,13 @@ class _SeriesIlocIndexer(_FrameIndexer):
             # In contrast to Column.__setitem__ (which downcasts the value to
             # the dtype of the column) here we upcast the series to the
             # larger data type mimicking pandas
-            to_dtype = np.result_type(value.dtype, self._frame.dtype)
+            to_dtype = find_common_type((value.dtype, self._frame.dtype))
             value = value.astype(to_dtype)
             if to_dtype != self._frame.dtype:
                 # Do not remove until pandas-3.0 support is added.
-                assert (
-                    PANDAS_LT_300
-                ), "Need to drop after pandas-3.0 support is added."
+                assert PANDAS_LT_300, (
+                    "Need to drop after pandas-3.0 support is added."
+                )
                 warnings.warn(
                     f"Setting an item of incompatible dtype is deprecated "
                     "and will raise in a future error of pandas. "
@@ -358,23 +359,25 @@ class _SeriesLocIndexer(_FrameIndexer):
                 "as labels (consistent with DataFrame behavior). To access "
                 "a value by position, use `ser.iloc[pos]`"
             )
-            if not _is_non_decimal_numeric_dtype(index_dtype) and not (
+            if not is_dtype_obj_numeric(
+                index_dtype, include_decimal=False
+            ) and not (
                 isinstance(index_dtype, cudf.CategoricalDtype)
                 and index_dtype.categories.dtype.kind in "iu"
             ):
                 # TODO: switch to cudf.utils.dtypes.is_integer(arg)
                 if isinstance(arg, cudf.Scalar) and arg.dtype.kind in "iu":
                     # Do not remove until pandas 3.0 support is added.
-                    assert (
-                        PANDAS_LT_300
-                    ), "Need to drop after pandas-3.0 support is added."
+                    assert PANDAS_LT_300, (
+                        "Need to drop after pandas-3.0 support is added."
+                    )
                     warnings.warn(warn_msg, FutureWarning)
                     return arg.value
                 elif is_integer(arg):
                     # Do not remove until pandas 3.0 support is added.
-                    assert (
-                        PANDAS_LT_300
-                    ), "Need to drop after pandas-3.0 support is added."
+                    assert PANDAS_LT_300, (
+                        "Need to drop after pandas-3.0 support is added."
+                    )
                     warnings.warn(warn_msg, FutureWarning)
                     return arg
             try:
@@ -630,6 +633,8 @@ class Series(SingleColumnFrame, IndexedFrame):
         name_from_data = None
         if data is None:
             data = {}
+        if dtype is not None:
+            dtype = cudf.dtype(dtype)
 
         if isinstance(data, (pd.Series, pd.Index, BaseIndex, Series)):
             if copy and not isinstance(data, (pd.Series, pd.Index)):
@@ -685,9 +690,6 @@ class Series(SingleColumnFrame, IndexedFrame):
                 column = column.copy(deep=True)
 
         assert isinstance(column, ColumnBase)
-
-        if dtype is not None:
-            column = column.astype(dtype)
 
         if name_from_data is not None and name is None:
             name = name_from_data
@@ -1156,8 +1158,7 @@ class Series(SingleColumnFrame, IndexedFrame):
     ):
         if not drop and inplace:
             raise TypeError(
-                "Cannot reset_index inplace on a Series "
-                "to create a DataFrame"
+                "Cannot reset_index inplace on a Series to create a DataFrame"
             )
         data, index = self._reset_index(
             level=level, drop=drop, allow_duplicates=allow_duplicates
@@ -1361,8 +1362,7 @@ class Series(SingleColumnFrame, IndexedFrame):
         elif isinstance(arg, cudf.Series):
             if not arg.index.is_unique:
                 raise ValueError(
-                    "Reindexing only valid with"
-                    " uniquely valued Index objects"
+                    "Reindexing only valid with uniquely valued Index objects"
                 )
             lhs = cudf.DataFrame(
                 {"x": self, "orig_order": as_column(range(len(self)))}
@@ -1463,12 +1463,12 @@ class Series(SingleColumnFrame, IndexedFrame):
             preprocess.index = preprocess.index._pandas_repr_compatible()
             if preprocess.dtype.categories.dtype.kind == "f":
                 pd_series = (
-                    preprocess.astype("str")
+                    preprocess.astype(CUDF_STRING_DTYPE)
                     .to_pandas()
                     .astype(
                         dtype=pd.CategoricalDtype(
                             categories=preprocess.dtype.categories.astype(
-                                "str"
+                                CUDF_STRING_DTYPE
                             ).to_pandas(),
                             ordered=preprocess.dtype.ordered,
                         )
@@ -1534,7 +1534,7 @@ class Series(SingleColumnFrame, IndexedFrame):
         dict[str | None, tuple[ColumnBase, Any, bool, Any]]
         | NotImplementedType,
         BaseIndex | None,
-        bool,
+        dict[str, Any],
     ]:
         # Specialize binops to align indices.
         if isinstance(other, Series):
@@ -1550,15 +1550,14 @@ class Series(SingleColumnFrame, IndexedFrame):
         else:
             lhs = self
 
-        try:
-            can_use_self_column_name = cudf.utils.utils._is_same_name(
-                self.name, other.name
-            )
-        except AttributeError:
-            can_use_self_column_name = False
+        ca_attributes = {}
+        if hasattr(other, "name") and cudf.utils.utils._is_same_name(
+            self.name, other.name
+        ):
+            ca_attributes["level_names"] = self._data._level_names
 
         operands = lhs._make_operands_for_binop(other, fill_value, reflect)
-        return operands, lhs.index, can_use_self_column_name
+        return operands, lhs.index, ca_attributes
 
     @copy_docstring(CategoricalAccessor)  # type: ignore
     @property
@@ -2126,18 +2125,19 @@ class Series(SingleColumnFrame, IndexedFrame):
     @_performance_tracking
     def astype(
         self,
-        dtype,
+        dtype: Dtype | dict[abc.Hashable, Dtype],
         copy: bool = False,
         errors: Literal["raise", "ignore"] = "raise",
-    ):
+    ) -> Self:
         if is_dict_like(dtype):
             if len(dtype) > 1 or self.name not in dtype:
                 raise KeyError(
                     "Only the Series name can be used for the key in Series "
                     "dtype mappings."
                 )
+            dtype = {self.name: cudf.dtype(dtype[self.name])}
         else:
-            dtype = {self.name: dtype}
+            dtype = {self.name: cudf.dtype(dtype)}
         return super().astype(dtype, copy, errors)
 
     @_performance_tracking
@@ -3362,7 +3362,7 @@ class Series(SingleColumnFrame, IndexedFrame):
         if percentiles is not None:
             if not all(0 <= x <= 1 for x in percentiles):
                 raise ValueError(
-                    "All percentiles must be between 0 and 1, " "inclusive."
+                    "All percentiles must be between 0 and 1, inclusive."
                 )
 
             # describe always includes 50th percentile
@@ -3773,9 +3773,9 @@ class Series(SingleColumnFrame, IndexedFrame):
             )
         if fill_method not in (no_default, None) or limit is not no_default:
             # Do not remove until pandas 3.0 support is added.
-            assert (
-                PANDAS_LT_300
-            ), "Need to drop after pandas-3.0 support is added."
+            assert PANDAS_LT_300, (
+                "Need to drop after pandas-3.0 support is added."
+            )
             warnings.warn(
                 "The 'fill_method' and 'limit' keywords in "
                 f"{type(self).__name__}.pct_change are deprecated and will be "
@@ -4184,9 +4184,9 @@ class DatetimeProperties(BaseDatelikeProperties):
         # Need to manually promote column to int32 because
         # pandas-matching binop behaviour requires that this
         # __mul__ returns an int16 column.
-        extra = self.series._column.millisecond.astype("int32") * np.int32(
-            1000
-        )
+        extra = self.series._column.millisecond.astype(
+            np.dtype(np.int32)
+        ) * np.int32(1000)
         return self._return_result_like_self(micro + extra)
 
     @property  # type: ignore
@@ -4446,7 +4446,7 @@ class DatetimeProperties(BaseDatelikeProperties):
         dtype: int8
         """
         return self._return_result_like_self(
-            self.series._column.quarter.astype(np.int8)
+            self.series._column.quarter.astype(np.dtype(np.int8))
         )
 
     @_performance_tracking

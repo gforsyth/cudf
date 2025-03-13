@@ -223,8 +223,7 @@ def parquet_path_or_buf(datadir):
     except Exception as excpr:
         if type(excpr).__name__ == "FileNotFoundError":
             pytest.skip(".parquet file is not found")
-        else:
-            print(type(excpr).__name__)
+        raise excpr
 
     def _make_parquet_path_or_buf(src):
         if src == "filepath":
@@ -472,8 +471,6 @@ def test_parquet_read_filtered(tmpdir):
     tbl_filtered = pq.read_table(fname, filters=[("1", ">", 60)])
 
     assert_eq(cudf.io.read_parquet_metadata(fname)[1], 2048 / 64)
-    print(len(df_filtered))
-    print(len(tbl_filtered))
     assert len(df_filtered) < len(df)
     assert len(tbl_filtered) <= len(df_filtered)
 
@@ -1724,9 +1721,6 @@ def test_parquet_writer_gpu_multi_index(tmpdir, simple_pdf, simple_gdf):
 
     assert_eq(simple_pdf, simple_gdf)
 
-    print("PDF Index Type: " + str(type(simple_pdf.index)))
-    print("GDF Index Type: " + str(type(simple_gdf.index)))
-
     # Write out the gdf using the GPU accelerated writer
     simple_gdf.to_parquet(gdf_fname.strpath, index=None)
     simple_pdf.to_parquet(pdf_fname.strpath, index=None)
@@ -2077,9 +2071,9 @@ def test_parquet_writer_chunked_max_file_size(
     for each_file in all_files:
         # Validate file sizes with some extra 1000
         # bytes buffer to spare
-        assert os.path.getsize(each_file) <= (
-            max_file_size_in_bytes
-        ), "File exceeded max_file_size"
+        assert os.path.getsize(each_file) <= (max_file_size_in_bytes), (
+            "File exceeded max_file_size"
+        )
 
 
 def test_parquet_writer_chunked_max_file_size_error():
@@ -4166,11 +4160,15 @@ def test_parquet_reader_with_mismatched_schemas_error():
 def test_parquet_roundtrip_zero_rows_no_column_mask():
     expected = cudf.DataFrame._from_data(
         {
-            "int": cudf.core.column.column_empty(0, "int64"),
-            "float": cudf.core.column.column_empty(0, "float64"),
-            "datetime": cudf.core.column.column_empty(0, "datetime64[ns]"),
-            "timedelta": cudf.core.column.column_empty(0, "timedelta64[ns]"),
-            "bool": cudf.core.column.column_empty(0, "bool"),
+            "int": cudf.core.column.column_empty(0, np.dtype(np.int64)),
+            "float": cudf.core.column.column_empty(0, np.dtype(np.float64)),
+            "datetime": cudf.core.column.column_empty(
+                0, np.dtype("datetime64[ns]")
+            ),
+            "timedelta": cudf.core.column.column_empty(
+                0, np.dtype("timedelta64[ns]")
+            ),
+            "bool": cudf.core.column.column_empty(0, np.dtype(np.bool_)),
             "decimal": cudf.core.column.column_empty(
                 0, cudf.Decimal64Dtype(1)
             ),

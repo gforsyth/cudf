@@ -1090,10 +1090,7 @@ def test_series_update(data, other):
     ps = gs.to_pandas()
 
     ps.update(p_other)
-    with expect_warning_if(
-        isinstance(other, cudf.Series) and other.isna().any(), UserWarning
-    ):
-        gs.update(g_other)
+    gs.update(g_other)
     assert_eq(gs, ps)
 
 
@@ -2094,13 +2091,13 @@ def test_default_construction():
 )
 def test_default_integer_bitwidth_construction(default_integer_bitwidth, data):
     s = cudf.Series(data)
-    assert s.dtype == np.dtype(f"i{default_integer_bitwidth//8}")
+    assert s.dtype == np.dtype(f"i{default_integer_bitwidth // 8}")
 
 
 @pytest.mark.parametrize("data", [[1.5, 2.5, 4.5], [1000, 2000, 4000, 3.14]])
 def test_default_float_bitwidth_construction(default_float_bitwidth, data):
     s = cudf.Series(data)
-    assert s.dtype == np.dtype(f"f{default_float_bitwidth//8}")
+    assert s.dtype == np.dtype(f"f{default_float_bitwidth // 8}")
 
 
 def test_series_ordered_dedup():
@@ -3023,7 +3020,7 @@ def test_roundtrip_series_plc_column(ps):
 
 def test_non_strings_dtype_object_pandas_compat_raises():
     with cudf.option_context("mode.pandas_compatible", True):
-        with pytest.raises(TypeError):
+        with pytest.raises(ValueError):
             cudf.Series([1], dtype=object)
 
 
@@ -3040,3 +3037,14 @@ def test_series_dataframe_count_float():
             gs.to_frame().count(),
             gs.to_frame().to_pandas(nullable=True).count(),
         )
+
+
+@pytest.mark.parametrize("arr", [np.array, cp.array, pd.Series])
+def test_construct_nonnative_array(arr):
+    data = [1, 2, 3.5, 4]
+    dtype = np.dtype("f4")
+    native = arr(data, dtype=dtype)
+    nonnative = arr(data, dtype=dtype.newbyteorder())
+    result = cudf.Series(nonnative)
+    expected = cudf.Series(native)
+    assert_eq(result, expected)

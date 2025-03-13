@@ -8,9 +8,7 @@ from __future__ import annotations
 from functools import partialmethod
 from typing import TYPE_CHECKING
 
-import fastexcel
 import pytest
-from packaging import version
 
 import polars
 
@@ -86,6 +84,7 @@ EXPECTED_FAILURES: Mapping[str, str | tuple[str, bool]] = {
     "tests/unit/io/test_parquet.py::test_allow_missing_columns[projection1-True-row_groups]": "Mismatching column read cudf#16394",
     "tests/unit/io/test_parquet.py::test_allow_missing_columns[projection0-True-columns]": "Mismatching column read cudf#16394",
     "tests/unit/io/test_parquet.py::test_allow_missing_columns[projection1-True-columns]": "Mismatching column read cudf#16394",
+    "tests/unit/io/test_parquet.py::test_scan_parquet_filter_statistics_load_missing_column_21391": "Mismatching column read cudf#16394",
     "tests/unit/io/test_scan.py::test_scan[single-csv-async]": "Debug output on stderr doesn't match",
     "tests/unit/io/test_scan.py::test_scan_with_limit[single-csv-async]": "Debug output on stderr doesn't match",
     "tests/unit/io/test_scan.py::test_scan_with_filter[single-csv-async]": "Debug output on stderr doesn't match",
@@ -124,6 +123,9 @@ EXPECTED_FAILURES: Mapping[str, str | tuple[str, bool]] = {
     "tests/unit/io/test_scan.py::test_scan_with_row_index_filter_and_limit[single-parquet-async]": "Debug output on stderr doesn't match",
     "tests/unit/io/test_scan.py::test_scan_include_file_name[False-scan_parquet-write_parquet]": "Need to add include_file_path to IR",
     "tests/unit/io/test_scan.py::test_scan_include_file_name[False-scan_csv-write_csv]": "Need to add include_file_path to IR",
+    "tests/unit/io/test_scan.py::test_scan_include_file_paths[False-scan_parquet-write_parquet]": "Debug output on stderr doesn't match",
+    "tests/unit/io/test_scan.py::test_scan_include_file_paths[False-scan_csv-write_csv]": "Debug output on stderr doesn't match",
+    "tests/unit/io/test_scan.py::test_scan_include_file_paths[False-scan_ndjson-write_ndjson]": "Debug output on stderr doesn't match",
     "tests/unit/io/test_scan.py::test_scan_include_file_name[False-scan_ndjson-write_ndjson]": "Need to add include_file_path to IR",
     "tests/unit/io/test_write.py::test_write_async[read_parquet-write_parquet]": "Need to add include_file_path to IR",
     "tests/unit/io/test_write.py::test_write_async[<lambda>-write_csv]": "Need to add include_file_path to IR",
@@ -178,6 +180,7 @@ EXPECTED_FAILURES: Mapping[str, str | tuple[str, bool]] = {
     "tests/unit/operations/test_group_by.py::test_group_by_median_by_dtype[input15-expected15-input_dtype15-output_dtype15]": "Unsupported groupby-agg for a particular dtype",
     "tests/unit/operations/test_group_by.py::test_group_by_median_by_dtype[input16-expected16-input_dtype16-output_dtype16]": "Unsupported groupby-agg for a particular dtype",
     "tests/unit/operations/test_group_by.py::test_group_by_binary_agg_with_literal": "Incorrect broadcasting of literals in groupby-agg",
+    "tests/unit/operations/test_group_by.py::test_group_by_lit_series": "Incorrect broadcasting of literals in groupby-agg",
     "tests/unit/operations/test_group_by.py::test_aggregated_scalar_elementwise_15602": "Unsupported boolean function/dtype combination in groupby-agg",
     "tests/unit/operations/test_group_by.py::test_schemas[data1-expr1-expected_select1-expected_gb1]": "Mismatching dtypes, needs cudf#15852",
     "tests/unit/operations/test_join.py::test_cross_join_slice_pushdown": "Need to implement slice pushdown for cross joins",
@@ -191,13 +194,11 @@ EXPECTED_FAILURES: Mapping[str, str | tuple[str, bool]] = {
     "tests/unit/test_cse.py::test_cse_predicate_self_join": "Debug output on stderr doesn't match",
     "tests/unit/test_empty.py::test_empty_9137": "Mismatching dtypes, needs cudf#15852",
     "tests/unit/test_errors.py::test_error_on_empty_group_by": "Incorrect exception raised",
+    "tests/unit/io/test_multiscan.py::test_include_file_paths[scan_parquet-write_parquet]": "Need to expose include_file_paths xref: cudf#18012",
+    "tests/unit/io/test_multiscan.py::test_include_file_paths[scan_csv-write_csv]": "Need to expose include_file_paths xref: cudf#18012",
+    "tests/unit/streaming/test_streaming_io.py::test_parquet_eq_statistics[False]": "Debug output on stderr doesn't match",
     # Maybe flaky, order-dependent?
-    "tests/unit/test_projections.py::test_schema_full_outer_join_projection_pd_13287": "Order-specific result check, query is correct but in different order",
     "tests/unit/test_queries.py::test_group_by_agg_equals_zero_3535": "libcudf sums all nulls to null, not zero",
-    "tests/unit/io/test_spreadsheet.py::test_write_excel_bytes[calamine]": (
-        "Fails when fastexcel version >= 0.12.1. tracking issue: https://github.com/pola-rs/polars/issues/20698",
-        version.parse(fastexcel.__version__) >= version.parse("0.12.1"),
-    ),
 }
 
 
@@ -211,6 +212,18 @@ TESTS_TO_SKIP: Mapping[str, str] = {
     # polars that the requested timezone is unknown.
     # Since this is random, just skip it, rather than xfailing.
     "tests/unit/lazyframe/test_serde.py::test_lf_serde_roundtrip_binary": "chrono_tz doesn't have all tzdata symlink names",
+    # TODO: Remove once we once we depend once we depend on
+    # polars version with pola-rs/polars/pull/21721
+    "tests/unit/io/test_parquet.py::test_general_prefiltering": "Due to unknown timezones in polars rust layer",
+    # The test may segfault with the legacy streaming engine. We should
+    # remove this skip when all polars tests use the new streaming engine.
+    "tests/unit/streaming/test_streaming_group_by.py::test_streaming_group_by_literal[1]": "May segfault w/the legacy streaming engine",
+    # Fails in CI, but passes locally
+    "tests/unit/streaming/test_streaming.py::test_streaming_streamable_functions": "RuntimeError: polars_python::sql::PySQLContext is unsendable, but is being dropped on another thread",
+    # TODO: Remove once when we support polars 1.23
+    "tests/unit/io/database/test_read.py::test_read_database[uri: connectorx]": "ValueError: arrow2",
+    "tests/unit/io/database/test_read.py::test_read_database_cx_credentials[fakedb://123:456@account/database/schema?warehouse=warehouse&role=role]": "ValueError: arrow2",
+    "tests/unit/io/database/test_read.py::test_read_database_cx_credentials[fakedb://my#%us3r:p433w0rd@not_a_real_host:9999/database]": "ValueError: arrow2",
 }
 
 
@@ -233,4 +246,7 @@ def pytest_collection_modifyitems(
                         reason=EXPECTED_FAILURES[item.nodeid][0],
                     ),
                 )
-            item.add_marker(pytest.mark.xfail(reason=EXPECTED_FAILURES[item.nodeid]))
+            else:
+                item.add_marker(
+                    pytest.mark.xfail(reason=EXPECTED_FAILURES[item.nodeid])
+                )

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024, NVIDIA CORPORATION.
+ * Copyright (c) 2024-2025, NVIDIA CORPORATION.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,10 @@
 #include <nanoarrow/nanoarrow.hpp>
 #include <nanoarrow/nanoarrow_device.h>
 
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+
 namespace cudf {
 namespace detail {
 
@@ -69,22 +73,19 @@ struct dispatch_copy_from_arrow_host {
     return mask;
   }
 
-  template <typename T,
-            CUDF_ENABLE_IF(not is_rep_layout_compatible<T>() &&
-                           !std::is_same_v<T, numeric::decimal128>)>
+  template <typename T, CUDF_ENABLE_IF(not is_rep_layout_compatible<T>() && !is_fixed_point<T>())>
   std::unique_ptr<column> operator()(ArrowSchemaView*, ArrowArray const*, data_type, bool)
   {
     CUDF_FAIL("Unsupported type in copy_from_arrow_host.");
   }
 
-  template <typename T,
-            CUDF_ENABLE_IF(is_rep_layout_compatible<T>() || std::is_same_v<T, numeric::decimal128>)>
+  template <typename T, CUDF_ENABLE_IF(is_rep_layout_compatible<T>() || is_fixed_point<T>())>
   std::unique_ptr<column> operator()(ArrowSchemaView* schema,
                                      ArrowArray const* input,
                                      data_type type,
                                      bool skip_mask)
   {
-    using DeviceType = std::conditional_t<std::is_same_v<T, numeric::decimal128>, __int128_t, T>;
+    using DeviceType = device_storage_type_t<T>;
 
     size_type const num_rows   = input->length;
     size_type const offset     = input->offset;
@@ -384,6 +385,11 @@ std::unique_ptr<column> get_column_copy(ArrowSchemaView* schema,
                                         rmm::cuda_stream_view stream,
                                         rmm::device_async_resource_ref mr)
 {
+  CUDF_EXPECTS(
+    input->length <= static_cast<std::int64_t>(std::numeric_limits<cudf::size_type>::max()),
+    "Total number of rows in Arrow column exceeds the column size limit.",
+    std::overflow_error);
+
   return type.id() != type_id::EMPTY
            ? std::move(type_dispatcher(
                type, dispatch_copy_from_arrow_host{stream, mr}, schema, input, type, skip_mask))
